@@ -267,7 +267,7 @@ function generateMarkdown(
   sectionChildren: Map<string, string[]>,
   edgeGraph: Map<string, Array<{ target: string; text: string }>>,
   imageDataUriMap: Map<string, string>,
-): { markdown: string; imageRefs: Map<string, string> } {
+): { markdown: string; imageRefs: Map<string, string>; missedCount: number } {
   const imageRefs = new Map<string, string>();
   let refIndex = 0;
   const lines: string[] = [
@@ -300,20 +300,14 @@ function generateMarkdown(
     const text = node.text.trim();
 
     if (node.type === "TextNode") {
-      if (!text) return;
       const heading = "#".repeat(Math.min(depth + 2, 6));
-      lines.push(`${heading} ${text}`);
+      lines.push(`${heading} ${text || "(无文本)"}`);
     } else if (node.type === "Section") {
       const heading = "#".repeat(Math.min(depth + 2, 6));
       lines.push(`${heading} 📁 ${text || "未命名分组"}`);
-    } else if (node.type === "UrlNode") {
-      const rawUrl = getString(node.raw.url).trim();
-      const rawTitle = getString(node.raw.title).trim() || rawUrl || "链接";
+    } else if (node.type === "UrlNode" || node.type === "LatexNode" || node.type === "ReferenceBlockNode" || node.type === "ExtensionEntity") {
       const indent = "  ".repeat(depth);
-      lines.push(rawUrl ? `${indent}- 🔗 [${rawTitle}](${rawUrl})` : `${indent}- ${text || "🔗 链接"}`);
-    } else if (node.type === "LatexNode" || node.type === "ReferenceBlockNode" || node.type === "ExtensionEntity") {
-      const indent = "  ".repeat(depth);
-      lines.push(`${indent}- ${text}`);
+      lines.push(`${indent}- ${text || node.type}`);
     } else if (node.type === "ImageNode") {
       const indent = "  ".repeat(Math.min(depth, 1));
       const attachmentId = getString(node.raw.attachmentId);
@@ -327,32 +321,37 @@ function generateMarkdown(
       }
     }
 
+    // 先渲染 Section 子节点
     const children = sectionChildren.get(uuid) ?? [];
     for (const child of children) renderNode(child, depth + 1);
 
+    // 再渲染边连接节点（用位置排序确保顺序正确）
     const outgoing = edgeGraph.get(uuid) ?? [];
-    let count = 0;
-    for (const edge of outgoing) {
-      if (visited.has(edge.target)) continue;
-      if (edge.text) {
+    const sortedOut = sortByPosition(nodes, outgoing.map(e => e.target));
+    for (const targetId of sortedOut) {
+      if (visited.has(targetId)) continue;
+      const edgeText = outgoing.find(e => e.target === targetId)?.text;
+      if (edgeText) {
         const indent = "  ".repeat(Math.max(0, depth));
-        lines.push(`${indent}> 💬 *${edge.text}*`);
+        lines.push(`${indent}> 💬 *${edgeText}*`);
       }
-      renderNode(edge.target, depth + 1);
-      count += 1;
-      if (count >= 50) break;
+      renderNode(targetId, depth + 1);
     }
   };
 
+  // 按类型分组渲染顶层：Section 优先，然后 TextNode
   for (const uuid of topLevel) {
-    renderNode(uuid, 0);
-    lines.push("");
+    if (nodes.get(uuid)?.type === "Section") { renderNode(uuid, 0); lines.push(""); }
+  }
+  for (const uuid of topLevel) {
+    if (nodes.get(uuid)?.type !== "Section") { renderNode(uuid, 0); lines.push(""); }
   }
 
   const leftovers = sortByPosition(
     nodes,
     [...nodes.keys()].filter((uuid) => !visited.has(uuid)),
   );
+
   if (leftovers.length > 0) {
     lines.push("---");
     lines.push("## 📌 未归类节点");
@@ -360,9 +359,7 @@ function generateMarkdown(
     for (const uuid of leftovers) {
       const node = nodes.get(uuid);
       if (!node) continue;
-      if (node.type === "TextNode" && node.text.trim()) {
-        lines.push(`- ${node.text.trim()}`);
-      } else if (node.type === "ImageNode") {
+      if (node.type === "ImageNode") {
         const attachmentId = getString(node.raw.attachmentId);
         const dataUri = imageDataUriMap.get(attachmentId);
         if (dataUri) {
@@ -370,11 +367,15 @@ function generateMarkdown(
           imageRefs.set(refKey, dataUri);
           lines.push(`- ![图片][${refKey}]`);
         }
+      } else {
+        const display = node.text.trim() || "(无文本)";
+        const prefix = node.type === "Section" ? "📁 " : "";
+        lines.push(`- ${prefix}${display}`);
       }
     }
   }
 
-  return { markdown: lines.join("\n"), imageRefs };
+  return { markdown: lines.join("\n"), imageRefs, missedCount: leftovers.length };
 }
 
 async function exportCurrentProjectAsMarkdownToClipboard(): Promise<void> {
@@ -449,7 +450,8 @@ print(json.dumps(r))`.trim();
   );
 
   const title = getString(await project.title) || "Untitled";
-  const { markdown, imageRefs } = generateMarkdown(title, nodes, topLevel, sectionChildren, edgeGraph, imageDataUriMap);
+  const { markdown, imageRefs, missedCount } = generateMarkdown(title, nodes, topLevel, sectionChildren, edgeGraph, imageDataUriMap);
+  await prg.toast("遗漏节点: " + missedCount);
 
   // 追加未引用的附件图片 + 所有引用定义
   let finalMarkdown = markdown;
