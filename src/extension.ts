@@ -371,8 +371,61 @@ async function exportCurrentProjectAsMarkdownToClipboard(): Promise<void> {
   const { nodes, edges } = extractAll(serializedStageObjects);
   const { sectionChildren, childToParent } = buildSectionHierarchy(serializedStageObjects);
 
-  // project.attachments 在 Comlink 上不可用，图片用 prg_to_markdown_v5.py
+  // 通过 uri.fsPath 获取路径 → fetch_binary 读文件 → JSZip 解压图片
   const imageDataUriMap = new Map<string, string>();
+  try {
+    const uri: any = await project.uri;
+    let prgPath = "";
+    if (typeof uri === "string") prgPath = uri;
+    else { prgPath = await uri.fsPath; if (!prgPath) prgPath = await uri.path; }
+    if (prgPath && typeof prgPath === "string") {
+      const fileUrl = "file:///" + prgPath.replace(/\\/g, "/");
+      const { buffer } = await prg.fetch_binary(fileUrl);
+      if (buffer) {
+        const JSZip = (await import("jszip")).default;
+        const zip = await JSZip.loadAsync(buffer);
+        const mimes: Record<string, string> = {
+          png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
+          webp: "image/webp", gif: "image/gif", bmp: "image/bmp", svg: "image/svg+xml",
+        };
+        for (const [name, entry] of Object.entries(zip.files)) {
+          if (entry.dir || !name.startsWith("attachments/")) continue;
+          const match = name.match(/^attachments\/([a-f0-9-]+)\.(\w+)$/);
+          if (!match) continue;
+          const base64 = await entry.async("base64");
+          const ext = match[2].toLowerCase();
+          imageDataUriMap.set(match[1], `data:${mimes[ext] || ""};base64,${base64}`);
+        }
+      }
+    }
+  } catch { /* 失败走 Python 回退 */ }
+
+  // Python 回退
+  if (imageDataUriMap.size === 0) {
+    try {
+      const uri: any = await project.uri;
+      let prgPath = "";
+      if (typeof uri === "string") prgPath = uri;
+      else { prgPath = await uri.fsPath; if (!prgPath) prgPath = await uri.path; }
+      if (prgPath && typeof prgPath === "string") {
+        const py = `
+import zipfile,base64,json,re,sys
+m={'png':'image/png','jpg':'image/jpeg','jpeg':'image/jpeg','webp':'image/webp','gif':'image/gif','bmp':'image/bmp','svg':'image/svg+xml'}
+r={}
+with zipfile.ZipFile(sys.argv[1]) as z:
+ for n in z.namelist():
+  if n.startswith('attachments/'):
+   a=re.match(r'attachments/([a-f0-9-]+)\\.(\\w+)$',n)
+   if a: r[a.group(1)]=f'data:{m.get(a.group(2),"")};base64,{base64.b64encode(z.read(n)).decode()}'
+print(json.dumps(r))`.trim();
+        const { code, stdout } = await prg.shell_execute("python", ["-c", py, prgPath]);
+        if (code === 0 && stdout.trim()) {
+          const map = JSON.parse(stdout);
+          for (const [k, v] of Object.entries(map)) imageDataUriMap.set(k, v as string);
+        }
+      }
+    } catch {}
+  }
 
   const edgeGraph = new Map<string, Array<{ target: string; text: string }>>();
   const pushEdge = (source: string, target: string, text: string) => {
