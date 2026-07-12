@@ -411,6 +411,7 @@ async function exportCurrentProjectAsMarkdownToClipboard(): Promise<void> {
     png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
     webp: "image/webp", gif: "image/gif", bmp: "image/bmp", svg: "image/svg+xml",
   };
+  let imgCount = 0;
   for (const [name, entry] of Object.entries(zip.files)) {
     if (entry.dir || !name.startsWith("attachments/")) continue;
     const match = name.match(/^attachments\/([a-f0-9-]+)\.(\w+)$/);
@@ -418,7 +419,9 @@ async function exportCurrentProjectAsMarkdownToClipboard(): Promise<void> {
     const base64 = await entry.async("base64");
     const ext = match[2].toLowerCase();
     imageDataUriMap.set(match[1], `data:${mimes[ext] || ""};base64,${base64}`);
+    imgCount++;
   }
+  await prg.toast("附件: " + imgCount);
 
   const { nodes, edges } = extractAll(serializedStageObjects);
   const { sectionChildren, childToParent } = buildSectionHierarchy(serializedStageObjects);
@@ -447,14 +450,16 @@ async function exportCurrentProjectAsMarkdownToClipboard(): Promise<void> {
   );
 
   const title = getString(await project.title) || "Untitled";
-  const { markdown, unusedImages } = generateMarkdown(title, nodes, topLevel, sectionChildren, edgeGraph, imageDataUriMap);
+  const { markdown } = generateMarkdown(title, nodes, topLevel, sectionChildren, edgeGraph, imageDataUriMap);
 
   // 追加未被 ImageNode 引用的附件图片
   let finalMarkdown = markdown;
-  if (unusedImages.length > 0) {
+  if (imageDataUriMap.size > usedImages.size) {
     finalMarkdown += "\n\n---\n## 📎 附件图片\n\n";
-    for (const uri of unusedImages) {
-      finalMarkdown += `![附件](${uri})\n\n`;
+    for (const [uuid, dataUri] of imageDataUriMap) {
+      if (!usedImages.has(uuid)) {
+        finalMarkdown += `![附件](${dataUri})\n\n`;
+      }
     }
   }
 
