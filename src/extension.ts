@@ -668,7 +668,7 @@ print(json.dumps(r))`.trim();
 await prg.keybinds_register(
   "prgToMarkdownClipboard",
   { $lucide: "FileText" },
-  "C-S-m",
+  "m n f",
   Comlink.proxy(async () => {
     await prg.toast("⏳ 正在导出 Markdown...");
     try {
