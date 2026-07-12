@@ -371,9 +371,38 @@ async function exportCurrentProjectAsMarkdownToClipboard(): Promise<void> {
   const { nodes, edges } = extractAll(serializedStageObjects);
   const { sectionChildren, childToParent } = buildSectionHierarchy(serializedStageObjects);
 
-  // 注：project.attachments (Map<string,Blob>) 在 Comlink proxy 上不可用，
-  //     .get() / .has() / Array.from() 均失败。图片导出请用 prg_to_markdown_v5.py
+  // 通过 shell_execute 调用 Python 读取 .prg ZIP 提取图片 base64
+  // Comlink 不支持 Blob 跨线程传递，这是唯一可行方案
   const imageDataUriMap = new Map<string, string>();
+  try {
+    const uri: any = await project.uri;
+    const prgPath = String(uri);
+    // 去掉 file:// 前缀和尾部斜杠
+    const filePath = prgPath.replace(/^file:\/\/\//, "").replace(/\/$/, "");
+    const pyScript = `
+import zipfile, base64, json, re, sys, os
+mimes = {'.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.webp':'image/webp','.gif':'image/gif','.bmp':'image/bmp','.svg':'image/svg+xml'}
+result = {}
+with zipfile.ZipFile(sys.argv[1]) as zf:
+ for name in zf.namelist():
+  if name.startswith('attachments/'):
+   m = re.match(r'attachments/([a-f0-9-]+)\\.(\\w+)$', name)
+   if m:
+    ext = '.' + m.group(2)
+    b64 = base64.b64encode(zf.read(name)).decode()
+    result[m.group(1)] = f'data:{mimes.get(ext,"")};base64,{b64}'
+print(json.dumps(result))
+`.trim();
+    const { code, stdout } = await prg.shell_execute("python", ["-c", pyScript, filePath]);
+    if (code === 0 && stdout) {
+      const map = JSON.parse(stdout);
+      for (const [k, v] of Object.entries(map)) {
+        imageDataUriMap.set(k, v as string);
+      }
+    }
+  } catch {
+    // shell_execute 不可用或 Python 未安装，图片占位
+  }
 
   const edgeGraph = new Map<string, Array<{ target: string; text: string }>>();
   const pushEdge = (source: string, target: string, text: string) => {
