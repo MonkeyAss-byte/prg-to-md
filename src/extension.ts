@@ -267,8 +267,9 @@ function generateMarkdown(
   sectionChildren: Map<string, string[]>,
   edgeGraph: Map<string, Array<{ target: string; text: string }>>,
   imageDataUriMap: Map<string, string>,
-): { markdown: string; imageIds: Set<string> } {
-  const usedImageIds = new Set<string>();
+): { markdown: string; imageRefs: Map<string, string> } {
+  const imageRefs = new Map<string, string>();
+  let refIndex = 0;
   const lines: string[] = [
     "---",
     `title: ${title}`,
@@ -318,8 +319,9 @@ function generateMarkdown(
       const attachmentId = getString(node.raw.attachmentId);
       const dataUri = imageDataUriMap.get(attachmentId);
       if (dataUri) {
-        usedImageIds.add(attachmentId);
-        lines.push(`${indent}![图片](${dataUri})`);
+        const refKey = "img-" + (++refIndex);
+        imageRefs.set(refKey, dataUri);
+        lines.push(`${indent}![图片][${refKey}]`);
       } else {
         lines.push(`${indent}> 🖼️ *(图片附件未找到)*`);
       }
@@ -361,7 +363,7 @@ function generateMarkdown(
     }
   }
 
-  return { markdown: lines.join("\n"), imageIds: usedImageIds };
+  return { markdown: lines.join("\n"), imageRefs };
 }
 
 async function exportCurrentProjectAsMarkdownToClipboard(): Promise<void> {
@@ -434,15 +436,27 @@ print(json.dumps(r))`.trim();
   );
 
   const title = getString(await project.title) || "Untitled";
-  const { markdown, imageIds } = generateMarkdown(title, nodes, topLevel, sectionChildren, edgeGraph, imageDataUriMap);
+  const { markdown, imageRefs } = generateMarkdown(title, nodes, topLevel, sectionChildren, edgeGraph, imageDataUriMap);
 
+  // 追加未引用的附件图片 + 所有引用定义
   let finalMarkdown = markdown;
-  if (imageDataUriMap.size > imageIds.size) {
-    finalMarkdown += "\n\n---\n## 📎 附件图片\n\n";
-    for (const [uuid, dataUri] of imageDataUriMap) {
-      if (!imageIds.has(uuid)) {
-        finalMarkdown += `![附件](${dataUri})\n\n`;
-      }
+  let refIndex = imageRefs.size;
+  for (const [uuid, dataUri] of imageDataUriMap) {
+    if ([...imageRefs.values()].includes(dataUri)) continue;
+    refIndex++;
+    const refKey = "img-" + refIndex;
+    imageRefs.set(refKey, dataUri);
+    if (finalMarkdown.indexOf("## 📎 附件图片") === -1) {
+      finalMarkdown += "\n\n---\n## 📎 附件图片\n\n";
+    }
+    finalMarkdown += `![附件][${refKey}]\n\n`;
+  }
+
+  // 所有图片引用定义放在最底部
+  if (imageRefs.size > 0) {
+    finalMarkdown += "\n\n---\n";
+    for (const [key, uri] of imageRefs) {
+      finalMarkdown += `[${key}]: ${uri}\n`;
     }
   }
 
