@@ -1,7 +1,7 @@
 {
   "name": "com.monkeyass-byte.prg-to-md-with-pic",
   "displayName": "PRG to Markdown (with Pic)",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "将 Project Graph 工程文件 (.prg) 导出为 Markdown（含图片）。按 m n f 触发。",
   "author": "MonkeyAss-byte",
   "type": "module",
