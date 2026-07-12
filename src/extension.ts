@@ -340,7 +340,7 @@ function generateMarkdown(
       }
       renderNode(edge.target, depth + 1);
       count += 1;
-      if (count >= 8) break;
+      if (count >= 50) break;
     }
   };
 
@@ -351,15 +351,26 @@ function generateMarkdown(
 
   const leftovers = sortByPosition(
     nodes,
-    [...nodes.keys()].filter((uuid) => !visited.has(uuid) && (nodes.get(uuid)?.type === "TextNode")),
+    [...nodes.keys()].filter((uuid) => !visited.has(uuid)),
   );
   if (leftovers.length > 0) {
     lines.push("---");
-    lines.push("## 📌 其他概念");
+    lines.push("## 📌 未归类节点");
     lines.push("");
     for (const uuid of leftovers) {
       const node = nodes.get(uuid);
-      if (node?.text.trim()) lines.push(`- ${node.text.trim()}`);
+      if (!node) continue;
+      if (node.type === "TextNode" && node.text.trim()) {
+        lines.push(`- ${node.text.trim()}`);
+      } else if (node.type === "ImageNode") {
+        const attachmentId = getString(node.raw.attachmentId);
+        const dataUri = imageDataUriMap.get(attachmentId);
+        if (dataUri) {
+          const refKey = "img-" + (++refIndex);
+          imageRefs.set(refKey, dataUri);
+          lines.push(`- ![图片][${refKey}]`);
+        }
+      }
     }
   }
 
