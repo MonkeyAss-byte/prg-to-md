@@ -266,6 +266,7 @@ function generateMarkdown(
   topLevel: string[],
   sectionChildren: Map<string, string[]>,
   edgeGraph: Map<string, Array<{ target: string; text: string }>>,
+  imageDataUriMap: Map<string, string>,
 ): string {
   const lines: string[] = [
     "---",
@@ -313,7 +314,13 @@ function generateMarkdown(
       lines.push(`${indent}- ${text}`);
     } else if (node.type === "ImageNode") {
       const indent = "  ".repeat(depth);
-      lines.push(`${indent}- ${text || "🖼️ Image"}`);
+      const attachmentId = getString(node.raw.attachmentId);
+      const dataUri = imageDataUriMap.get(attachmentId);
+      if (dataUri) {
+        lines.push(`${indent}![图片](${dataUri})`);
+      } else {
+        lines.push(`${indent}> 🖼️ *(图片附件未找到)*`);
+      }
     }
 
     const children = sectionChildren.get(uuid) ?? [];
@@ -359,6 +366,24 @@ async function exportCurrentProjectAsMarkdownToClipboard(): Promise<void> {
   const project = await prg.tabs_getCurrentProject();
   if (!project) throw new Error("当前没有打开的项目标签页");
 
+  // 构建 image UUID -> base64 data URI 映射
+  const imageDataUriMap = new Map<string, string>();
+  try {
+    const attachments: Map<string, Blob> = await project.attachments;
+    if (attachments) {
+      for (const [uuid, blob] of attachments) {
+        if (!blob.type.startsWith("image/")) continue;
+        const buf = await blob.arrayBuffer();
+        const bytes = new Uint8Array(buf);
+        let binary = "";
+        for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+        imageDataUriMap.set(uuid, `data:${blob.type};base64,${btoa(binary)}`);
+      }
+    }
+  } catch {
+    // 附件不可用不影响导出
+  }
+
   const parsed = await project.parseProjectFile();
   const serializedStageObjects = Array.isArray(parsed.serializedStageObjects) ? parsed.serializedStageObjects : [];
   const { nodes, edges } = extractAll(serializedStageObjects);
@@ -388,7 +413,7 @@ async function exportCurrentProjectAsMarkdownToClipboard(): Promise<void> {
   );
 
   const title = getString(await project.title) || "Untitled";
-  const markdown = generateMarkdown(title, nodes, topLevel, sectionChildren, edgeGraph);
+  const markdown = generateMarkdown(title, nodes, topLevel, sectionChildren, edgeGraph, imageDataUriMap);
 
   await prg.dialog_copy("已复制 markdown", "可直接粘贴到你的文档中", markdown);
   await prg.toast_success("已生成并复制当前 .prg 的 markdown");
