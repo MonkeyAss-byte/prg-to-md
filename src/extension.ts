@@ -376,11 +376,16 @@ async function exportCurrentProjectAsMarkdownToClipboard(): Promise<void> {
   else { prgPath = await uri.fsPath; if (!prgPath) prgPath = await uri.path; }
   if (!prgPath) throw new Error("无法获取文件路径");
 
-  // 2. 下载并解压 .prg ZIP（绕过 parseProjectFile，直接读原始数据）
-  const fileUrl = "file:///" + prgPath.replace(/\\/g, "/");
-  const { buffer } = await prg.fetch_binary(fileUrl);
+  // 2. 通过 shell_execute + PowerShell 读 .prg 文件转 base64 → JSZip 解压
+  const psScript = `[Convert]::ToBase64String([IO.File]::ReadAllBytes('${prgPath.replace(/'/g, "''")}'))`;
+  const { code, stdout } = await prg.shell_execute("powershell", ["-Command", psScript]);
+  if (code !== 0 || !stdout) throw new Error("读取文件失败");
+  const binaryStr = atob(stdout.replace(/\s/g, ""));
+  const fileBytes = new Uint8Array(binaryStr.length);
+  for (let i = 0; i < binaryStr.length; i++) fileBytes[i] = binaryStr.charCodeAt(i);
+
   const JSZip = (await import("jszip")).default;
-  const zip = await JSZip.loadAsync(buffer);
+  const zip = await JSZip.loadAsync(fileBytes);
 
   // 3. 解析 stage.msgpack
   const stageEntry = zip.file("stage.msgpack");
