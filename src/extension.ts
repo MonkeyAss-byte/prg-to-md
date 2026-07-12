@@ -375,46 +375,29 @@ async function exportCurrentProjectAsMarkdownToClipboard(): Promise<void> {
   else { prgPath = await uri.fsPath; if (!prgPath) prgPath = await uri.path; }
   if (!prgPath) throw new Error("无法获取文件路径");
 
-  // 2. 通过 shell_execute + Python 提取图片（base64 二进制可靠，避免 PS 编码问题）
+  // 2. 单次 Python 调用：解析 stage.msgpack + 提取图片 base64
   const imageDataUriMap = new Map<string, string>();
-  try {
-    const py = `
-import zipfile,base64,json,re,sys
+  const pyScript = `
+import zipfile,base64,json,re,sys,msgpack
 m={'png':'image/png','jpg':'image/jpeg','jpeg':'image/jpeg','webp':'image/webp','gif':'image/gif','bmp':'image/bmp','svg':'image/svg+xml'}
-r={}
+r={'stage':[],'images':{}}
 with zipfile.ZipFile(sys.argv[1]) as z:
+ if 'stage.msgpack' in z.namelist():
+  r['stage']=msgpack.unpackb(z.read('stage.msgpack'),raw=False)
  for n in z.namelist():
   if n.startswith('attachments/'):
    a=re.match(r'attachments/([a-f0-9-]+)\\.(\\w+)$',n)
-   if a: r[a.group(1)]=f'data:{m.get(a.group(2),"")};base64,{base64.b64encode(z.read(n)).decode()}'
+   if a: r['images'][a.group(1)]=f'data:{m.get(a.group(2),"")};base64,{base64.b64encode(z.read(n)).decode()}'
 print(json.dumps(r))`.trim();
-    const { code: pyCode, stdout: pyOut } = await prg.shell_execute("python", ["-c", py, prgPath]);
-    if (pyCode === 0 && pyOut.trim()) {
-      const map = JSON.parse(pyOut);
-      for (const [k, v] of Object.entries(map)) imageDataUriMap.set(k, v as string);
-    }
-  } catch {}
+  const { code, stdout } = await prg.shell_execute("python", ["-c", pyScript, prgPath]);
+  if (code !== 0 || !stdout) throw new Error("Python 解析失败");
+  const data = JSON.parse(stdout);
 
-  // 3. 通过 PowerShell 读 .prg 文件 → JSZip → 解析 stage.msgpack
-  const psScript = `[Convert]::ToBase64String([IO.File]::ReadAllBytes('${prgPath.replace(/'/g, "''")}'))`;
-  const { code, stdout } = await prg.shell_execute("powershell", ["-Command", psScript]);
-  if (code !== 0 || !stdout) throw new Error("读取文件失败");
-  const binaryStr = atob(stdout.replace(/\s/g, ""));
-  const fileBytes = new Uint8Array(binaryStr.length);
-  for (let i = 0; i < binaryStr.length; i++) fileBytes[i] = binaryStr.charCodeAt(i);
+  const stageData: any = data.stage;
+  for (const [k, v] of Object.entries(data.images || {})) {
+    imageDataUriMap.set(k, v as string);
+  }
 
-  const JSZip = (await import("jszip")).default;
-  const zip = await JSZip.loadAsync(fileBytes);
-
-  // 3. 解析 stage.msgpack
-  const stageEntry = zip.file("stage.msgpack");
-  if (!stageEntry) throw new Error("stage.msgpack not found");
-  const stageRaw = await stageEntry.async("uint8array");
-  // 动态 import msgpack
-  const { decode } = await import("@msgpack/msgpack");
-  const stageData: any = decode(stageRaw);
-
-  // 4. 处理 dict 格式：{ stageObjects: [...] } 或 { objects: [...] }
   let serializedStageObjects: any[];
   if (Array.isArray(stageData)) {
     serializedStageObjects = stageData;
