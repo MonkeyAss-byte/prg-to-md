@@ -371,37 +371,8 @@ async function exportCurrentProjectAsMarkdownToClipboard(): Promise<void> {
   const { nodes, edges } = extractAll(serializedStageObjects);
   const { sectionChildren, childToParent } = buildSectionHierarchy(serializedStageObjects);
 
-  // 通过 shell_execute + Python 读 .prg ZIP 提取图片 base64
-  // Comlink 不支持 Blob/file:// fetch，这是唯一跨平台可行方案
+  // project.attachments 在 Comlink 上不可用，图片用 prg_to_markdown_v5.py
   const imageDataUriMap = new Map<string, string>();
-  try {
-    // 获取 .prg 文件路径
-    const uri: any = await project.uri;
-    const prgPath = typeof uri === "string" ? uri
-      : (typeof uri?.path === "string" ? uri.path : "");
-    if (!prgPath) { await prg.toast("无法获取文件路径"); }
-    else {
-      const pyScript = `import zipfile,base64,json,re,sys
-m={'png':'image/png','jpg':'image/jpeg','jpeg':'image/jpeg','webp':'image/webp','gif':'image/gif','bmp':'image/bmp','svg':'image/svg+xml'}
-r={}
-with zipfile.ZipFile(sys.argv[1]) as z:
- for n in z.namelist():
-  if n.startswith('attachments/'):
-   a=re.match(r'attachments/([a-f0-9-]+)\\.(\\w+)$',n)
-   if a: r[a.group(1)]=f'data:{m.get(a.group(2),\"\")};base64,{base64.b64encode(z.read(n)).decode()}'
-print(json.dumps(r))`;
-      const { code, stdout } = await prg.shell_execute("python", ["-c", pyScript, prgPath]);
-      if (code === 0 && stdout) {
-        const map = JSON.parse(stdout);
-        for (const [k, v] of Object.entries(map)) imageDataUriMap.set(k, v as string);
-        await prg.toast_success("图片: " + imageDataUriMap.size);
-      } else {
-        await prg.toast("py code=" + code);
-      }
-    }
-  } catch (e) {
-    await prg.toast_error("图片提取失败: " + (e instanceof Error ? e.message : String(e)));
-  }
 
   const edgeGraph = new Map<string, Array<{ target: string; text: string }>>();
   const pushEdge = (source: string, target: string, text: string) => {
