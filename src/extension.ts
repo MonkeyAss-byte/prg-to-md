@@ -366,28 +366,38 @@ async function exportCurrentProjectAsMarkdownToClipboard(): Promise<void> {
   const project = await prg.tabs_getCurrentProject();
   if (!project) throw new Error("当前没有打开的项目标签页");
 
-  // 构建 image UUID -> base64 data URI 映射
-  const imageDataUriMap = new Map<string, string>();
-  try {
-    const attachments: Map<string, Blob> = await project.attachments;
-    if (attachments) {
-      for (const [uuid, blob] of attachments) {
-        if (!blob.type.startsWith("image/")) continue;
-        const buf = await blob.arrayBuffer();
-        const bytes = new Uint8Array(buf);
-        let binary = "";
-        for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-        imageDataUriMap.set(uuid, `data:${blob.type};base64,${btoa(binary)}`);
-      }
-    }
-  } catch {
-    // 附件不可用不影响导出
-  }
-
   const parsed = await project.parseProjectFile();
   const serializedStageObjects = Array.isArray(parsed.serializedStageObjects) ? parsed.serializedStageObjects : [];
   const { nodes, edges } = extractAll(serializedStageObjects);
   const { sectionChildren, childToParent } = buildSectionHierarchy(serializedStageObjects);
+
+  // 收集所有 ImageNode 的 attachmentId，逐个从 attachments Map 获取 Blob
+  const imageIds: string[] = [];
+  for (const node of nodes.values()) {
+    if (node.type === "ImageNode") {
+      const aid = getString(node.raw.attachmentId);
+      if (aid) imageIds.push(aid);
+    }
+  }
+
+  const imageDataUriMap = new Map<string, string>();
+  const attMap: any = await project.attachments;
+  if (attMap) {
+    for (const aid of imageIds) {
+      try {
+        const blob: Blob | undefined = await attMap.get(aid);
+        if (blob && blob.type.startsWith("image/")) {
+          const buf = await blob.arrayBuffer();
+          const bytes = new Uint8Array(buf);
+          let binary = "";
+          for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+          imageDataUriMap.set(aid, `data:${blob.type};base64,${btoa(binary)}`);
+        }
+      } catch {
+        // 单个图片失败不影响整体
+      }
+    }
+  }
 
   const edgeGraph = new Map<string, Array<{ target: string; text: string }>>();
   const pushEdge = (source: string, target: string, text: string) => {
