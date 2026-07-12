@@ -1,0 +1,19 @@
+{
+  "name": "com.quking.prg-markdown-helper",
+  "displayName": ".prg to .md",
+  "version": "0.1.0",
+  "description": "将 Project Graph 工程文件 (.prg) 一键导出为 Markdown 并复制到剪贴板。按 m d s 触发。",
+  "author": "QuKing",
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "package": "node scripts/package.mjs",
+    "install:ext": "node scripts/install.mjs"
+  },
+  "devDependencies": {
+    "@msgpack/msgpack": "^3.1.2",
+    "esbuild": "^0.25.9",
+    "jszip": "^3.10.1"
+  }
+}
+
