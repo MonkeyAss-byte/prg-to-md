@@ -460,6 +460,7 @@ print(json.dumps(r))`.trim();
   }
 
   const { nodes, edges } = extractAll(serializedStageObjects);
+  const { sectionChildren, childToParent } = buildSectionHierarchy(serializedStageObjects);
   const edgeGraph = new Map<string, Array<{ target: string; text: string }>>();
   const pushEdge = (source: string, target: string, text: string) => {
     const arr = edgeGraph.get(source) ?? [];
