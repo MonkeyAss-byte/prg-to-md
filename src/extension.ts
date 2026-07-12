@@ -598,6 +598,8 @@ print(json.dumps(r))`.trim();
   const { sectionChildren, childToParent } = buildSectionHierarchy(serializedStageObjects);
   collectNestedNodes(serializedStageObjects, nodes);
   collectNestedSectionHierarchy(serializedStageObjects, sectionChildren, childToParent);
+
+  await prg.toast(`⏳ 已提取 ${nodes.size} 个节点 · ${edges.length} 条连线，正在排版...`);
   const edgeGraph = new Map<string, Array<{ target: string; text: string }>>();
   const pushEdge = (source: string, target: string, text: string) => {
     const arr = edgeGraph.get(source) ?? [];
@@ -633,7 +635,6 @@ print(json.dumps(r))`.trim();
   );
 
   const title = getString(await project.title) || "Untitled";
-  await prg.toast("⏳ 正在生成排版...");
   const { markdown, imageRefs, missedCount } = generateMarkdown(title, nodes, topLevel, sectionChildren, edgeGraph, imageDataUriMap);
 
   // 追加未引用的附件图片 + 所有引用定义
@@ -658,8 +659,8 @@ print(json.dumps(r))`.trim();
     }
   }
 
-  await prg.dialog_copy("已复制 markdown", "可直接粘贴到你的文档中", finalMarkdown);
-  await prg.toast_success(`✅ 导出完成 · ${nodes.size} 节点 · ${edges.length} 连线`);
+  await prg.dialog_copy("导出完成", `节点 ${nodes.size} · 连线 ${edges.length} · 图片 ${imageDataUriMap.size}`, finalMarkdown);
+  await prg.toast_success(`✅ 已复制 · ${nodes.size} 节点 · ${edges.length} 连线`);
 }
 
 // ── 注册快捷键 ──
@@ -667,7 +668,7 @@ print(json.dumps(r))`.trim();
 await prg.keybinds_register(
   "prgToMarkdownClipboard",
   { $lucide: "FileText" },
-  "m d s",
+  "C-S-m",
   Comlink.proxy(async () => {
     await prg.toast("⏳ 正在导出 Markdown...");
     try {
