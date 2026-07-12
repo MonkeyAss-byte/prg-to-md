@@ -375,7 +375,27 @@ async function exportCurrentProjectAsMarkdownToClipboard(): Promise<void> {
   else { prgPath = await uri.fsPath; if (!prgPath) prgPath = await uri.path; }
   if (!prgPath) throw new Error("无法获取文件路径");
 
-  // 2. 通过 shell_execute + PowerShell 读 .prg 文件转 base64 → JSZip 解压
+  // 2. 通过 shell_execute + Python 提取图片（base64 二进制可靠，避免 PS 编码问题）
+  const imageDataUriMap = new Map<string, string>();
+  try {
+    const py = `
+import zipfile,base64,json,re,sys
+m={'png':'image/png','jpg':'image/jpeg','jpeg':'image/jpeg','webp':'image/webp','gif':'image/gif','bmp':'image/bmp','svg':'image/svg+xml'}
+r={}
+with zipfile.ZipFile(sys.argv[1]) as z:
+ for n in z.namelist():
+  if n.startswith('attachments/'):
+   a=re.match(r'attachments/([a-f0-9-]+)\\.(\\w+)$',n)
+   if a: r[a.group(1)]=f'data:{m.get(a.group(2),"")};base64,{base64.b64encode(z.read(n)).decode()}'
+print(json.dumps(r))`.trim();
+    const { code: pyCode, stdout: pyOut } = await prg.shell_execute("python", ["-c", py, prgPath]);
+    if (pyCode === 0 && pyOut.trim()) {
+      const map = JSON.parse(pyOut);
+      for (const [k, v] of Object.entries(map)) imageDataUriMap.set(k, v as string);
+    }
+  } catch {}
+
+  // 3. 通过 PowerShell 读 .prg 文件 → JSZip → 解析 stage.msgpack
   const psScript = `[Convert]::ToBase64String([IO.File]::ReadAllBytes('${prgPath.replace(/'/g, "''")}'))`;
   const { code, stdout } = await prg.shell_execute("powershell", ["-Command", psScript]);
   if (code !== 0 || !stdout) throw new Error("读取文件失败");
@@ -403,24 +423,6 @@ async function exportCurrentProjectAsMarkdownToClipboard(): Promise<void> {
   } else {
     serializedStageObjects = [];
   }
-
-  // 5. 提取图片附件
-  const imageDataUriMap = new Map<string, string>();
-  const mimes: Record<string, string> = {
-    png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
-    webp: "image/webp", gif: "image/gif", bmp: "image/bmp", svg: "image/svg+xml",
-  };
-  let imgCount = 0;
-  for (const [name, entry] of Object.entries(zip.files)) {
-    if (entry.dir || !name.startsWith("attachments/")) continue;
-    const match = name.match(/^attachments\/([a-f0-9-]+)\.(\w+)$/);
-    if (!match) continue;
-    const base64 = await entry.async("base64");
-    const ext = match[2].toLowerCase();
-    imageDataUriMap.set(match[1], `data:${mimes[ext] || ""};base64,${base64}`);
-    imgCount++;
-  }
-  await prg.toast("附件: " + imgCount);
 
   const { nodes, edges } = extractAll(serializedStageObjects);
   const { sectionChildren, childToParent } = buildSectionHierarchy(serializedStageObjects);
