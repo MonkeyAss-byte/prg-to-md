@@ -315,15 +315,15 @@ function generateMarkdown(
       const indent = "  ".repeat(depth);
       lines.push(`${indent}- ${text}`);
     } else if (node.type === "ImageNode") {
-      const indent = "  ".repeat(depth);
+      const indent = "  ".repeat(Math.min(depth, 1));
       const attachmentId = getString(node.raw.attachmentId);
       const dataUri = imageDataUriMap.get(attachmentId);
       if (dataUri) {
         const refKey = "img-" + (++refIndex);
         imageRefs.set(refKey, dataUri);
-        lines.push(`${indent}![图片][${refKey}]`);
+        lines.push(`${indent}- ![图片][${refKey}]`);
       } else {
-        lines.push(`${indent}> 🖼️ *(图片附件未找到)*`);
+        lines.push(`${indent}- 🖼️ *(图片附件未找到)*`);
       }
     }
 
@@ -381,15 +381,17 @@ async function exportCurrentProjectAsMarkdownToClipboard(): Promise<void> {
   const imageDataUriMap = new Map<string, string>();
   const pyScript = `
 import zipfile,base64,json,re,sys,msgpack
-m={'png':'image/png','jpg':'image/jpeg','jpeg':'image/jpeg','webp':'image/webp','gif':'image/gif','bmp':'image/bmp','svg':'image/svg+xml'}
+m={'png':'image/png','jpg':'image/jpeg','jpeg':'image/jpeg','webp':'image/webp','gif':'image/gif','bmp':'image/bmp','svg':'image/svg+xml','tiff':'image/tiff','ico':'image/x-icon','jfif':'image/jpeg'}
 r={'stage':[],'images':{}}
 with zipfile.ZipFile(sys.argv[1]) as z:
  if 'stage.msgpack' in z.namelist():
   r['stage']=msgpack.unpackb(z.read('stage.msgpack'),raw=False)
  for n in z.namelist():
   if n.startswith('attachments/'):
-   a=re.match(r'attachments/([a-f0-9-]+)\\.(\\w+)$',n)
-   if a: r['images'][a.group(1)]=f'data:{m.get(a.group(2),"")};base64,{base64.b64encode(z.read(n)).decode()}'
+   a=re.match(r'attachments/([a-f0-9-]+)\\.(\\w+)$',n,re.I)
+   if a:
+    e=a.group(2).lower()
+    r['images'][a.group(1)]=f'data:{m.get(e,"image/png")};base64,{base64.b64encode(z.read(n)).decode()}'
 print(json.dumps(r))`.trim();
   const { code, stdout } = await prg.shell_execute("python", ["-c", pyScript, prgPath]);
   if (code !== 0 || !stdout) throw new Error("Python 解析失败");
