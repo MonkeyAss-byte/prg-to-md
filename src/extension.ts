@@ -267,8 +267,8 @@ function generateMarkdown(
   sectionChildren: Map<string, string[]>,
   edgeGraph: Map<string, Array<{ target: string; text: string }>>,
   imageDataUriMap: Map<string, string>,
-): { markdown: string; unusedImages: string[] } {
-  const usedImages = new Set<string>();
+): { markdown: string; imageIds: Set<string> } {
+  const usedImageIds = new Set<string>();
   const lines: string[] = [
     "---",
     `title: ${title}`,
@@ -318,7 +318,7 @@ function generateMarkdown(
       const attachmentId = getString(node.raw.attachmentId);
       const dataUri = imageDataUriMap.get(attachmentId);
       if (dataUri) {
-        usedImages.add(attachmentId);
+        usedImageIds.add(attachmentId);
         lines.push(`${indent}![图片](${dataUri})`);
       } else {
         lines.push(`${indent}> 🖼️ *(图片附件未找到)*`);
@@ -361,8 +361,7 @@ function generateMarkdown(
     }
   }
 
-  const unusedImages = [...imageDataUriMap.keys()].filter((k) => !usedImages.has(k));
-  return { markdown: lines.join("\n"), unusedImages };
+  return { markdown: lines.join("\n"), imageIds: usedImageIds };
 }
 
 async function exportCurrentProjectAsMarkdownToClipboard(): Promise<void> {
@@ -450,14 +449,13 @@ async function exportCurrentProjectAsMarkdownToClipboard(): Promise<void> {
   );
 
   const title = getString(await project.title) || "Untitled";
-  const { markdown } = generateMarkdown(title, nodes, topLevel, sectionChildren, edgeGraph, imageDataUriMap);
+  const { markdown, imageIds } = generateMarkdown(title, nodes, topLevel, sectionChildren, edgeGraph, imageDataUriMap);
 
-  // 追加未被 ImageNode 引用的附件图片
   let finalMarkdown = markdown;
-  if (imageDataUriMap.size > usedImages.size) {
+  if (imageDataUriMap.size > imageIds.size) {
     finalMarkdown += "\n\n---\n## 📎 附件图片\n\n";
     for (const [uuid, dataUri] of imageDataUriMap) {
-      if (!usedImages.has(uuid)) {
+      if (!imageIds.has(uuid)) {
         finalMarkdown += `![附件](${dataUri})\n\n`;
       }
     }
