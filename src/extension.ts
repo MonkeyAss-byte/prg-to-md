@@ -371,37 +371,29 @@ async function exportCurrentProjectAsMarkdownToClipboard(): Promise<void> {
   const { nodes, edges } = extractAll(serializedStageObjects);
   const { sectionChildren, childToParent } = buildSectionHierarchy(serializedStageObjects);
 
-  // 通过 shell_execute 调用 Python 读取 .prg ZIP 提取图片 base64
-  // Comlink 不支持 Blob 跨线程传递，这是唯一可行方案
+  // 通过 fetch_binary 读 .prg ZIP 文件 + JSZip 解压提取图片 base64
   const imageDataUriMap = new Map<string, string>();
   try {
     const uri: any = await project.uri;
-    const prgPath = String(uri);
-    // 去掉 file:// 前缀和尾部斜杠
-    const filePath = prgPath.replace(/^file:\/\/\//, "").replace(/\/$/, "");
-    const pyScript = `
-import zipfile, base64, json, re, sys, os
-mimes = {'.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.webp':'image/webp','.gif':'image/gif','.bmp':'image/bmp','.svg':'image/svg+xml'}
-result = {}
-with zipfile.ZipFile(sys.argv[1]) as zf:
- for name in zf.namelist():
-  if name.startswith('attachments/'):
-   m = re.match(r'attachments/([a-f0-9-]+)\\.(\\w+)$', name)
-   if m:
-    ext = '.' + m.group(2)
-    b64 = base64.b64encode(zf.read(name)).decode()
-    result[m.group(1)] = f'data:{mimes.get(ext,"")};base64,{b64}'
-print(json.dumps(result))
-`.trim();
-    const { code, stdout } = await prg.shell_execute("python", ["-c", pyScript, filePath]);
-    if (code === 0 && stdout) {
-      const map = JSON.parse(stdout);
-      for (const [k, v] of Object.entries(map)) {
-        imageDataUriMap.set(k, v as string);
-      }
+    const fileUrl = String(uri);
+    const mimes: Record<string, string> = {
+      png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
+      webp: "image/webp", gif: "image/gif", bmp: "image/bmp", svg: "image/svg+xml",
+    };
+    const { buffer } = await prg.fetch_binary(fileUrl);
+    // 动态 import JSZip（esbuild 会 bundle）
+    const JSZip = (await import("jszip")).default;
+    const zip = await JSZip.loadAsync(buffer);
+    for (const [name, entry] of Object.entries(zip.files)) {
+      if (entry.dir || !name.startsWith("attachments/")) continue;
+      const match = name.match(/^attachments\/([a-f0-9-]+)\.(\w+)$/);
+      if (!match) continue;
+      const base64 = await entry.async("base64");
+      const ext = match[2].toLowerCase();
+      imageDataUriMap.set(match[1], `data:${mimes[ext] || ""};base64,${base64}`);
     }
   } catch {
-    // shell_execute 不可用或 Python 未安装，图片占位
+    // ZIP 读取失败时图片占位
   }
 
   const edgeGraph = new Map<string, Array<{ target: string; text: string }>>();
