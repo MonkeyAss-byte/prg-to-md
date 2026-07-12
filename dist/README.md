@@ -1,19 +1,20 @@
-# PRG Markdown Helper
+# PRG to Markdown (with Pic)
 
-将当前打开的 `.prg` 工程文件解析为 Markdown 并复制到剪贴板。
+将当前打开的 `.prg` 工程文件导出为 Markdown（含内嵌图片），一键复制到剪贴板。
 
 ## 功能
 
-- 解析所有节点类型：TextNode、Section、ImageNode、UrlNode、LatexNode、ExtensionEntity 等
-- 解析所有连线类型：LineEdge、ArcEdge、CubicCatmullRomSplineEdge、MultiTargetUndirectedEdge
-- 保留 Section 层级结构和节点位置排序
-- 生成带 YAML frontmatter 的完整 Markdown
-- 一键复制到剪贴板
+- 解析所有节点：TextNode、Section、ImageNode、UrlNode、LatexNode、ExtensionEntity 等
+- 递归提取边内嵌节点和层级关系
+- 解析所有连线：LineEdge、ArcEdge、CubicCatmullRomSplineEdge、MultiTargetUndirectedEdge
+- 包含关系用 `#` 标题层级，边连接用 `-` 缩进列表
+- 图片内嵌为 base64 引用
+- 零外部依赖（PowerShell 读文件 + JS 解析）
 
 ## 使用方式
 
 1. 安装扩展，**重启 Project Graph**
-2. 打开 `.prg` 工程，依次按 **`m` → `d` → `s`**
+2. 打开 `.prg` 工程，依次按 **`m` → `n` → `f`**
 3. Markdown 自动复制到剪贴板
 
 ## 开发
@@ -25,4 +26,4 @@ npm run install:ext    # 安装到本地 Project Graph
 npm run package        # 打包为 .prg
 ```
 
-产物：`out/com.quking.prg-markdown-helper.prg`
+产物：`out/com.monkeyass-byte.prg-to-md-with-pic.prg`

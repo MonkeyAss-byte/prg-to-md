@@ -1,8 +1,8 @@
 {
-  "name": "com.monkeyass-byte.prg-to-md",
-  "displayName": "com.monkeyass-byte.prg-to-md",
+  "name": "com.monkeyass-byte.prg-to-md-with-pic",
+  "displayName": "PRG to Markdown (with Pic)",
   "version": "0.1.0",
-  "description": "将 Project Graph 工程文件 (.prg) 一键导出为 Markdown 并复制到剪贴板。按 m d s 触发。",
+  "description": "将 Project Graph 工程文件 (.prg) 导出为 Markdown（含图片）。按 m n f 触发。",
   "author": "MonkeyAss-byte",
   "type": "module",
   "scripts": {

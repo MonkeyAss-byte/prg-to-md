@@ -1,6 +1,15 @@
 import JSZip from "jszip";
 import { decode as msgpackDecode } from "@msgpack/msgpack";
 
+function uint8ToBase64(bytes: Uint8Array): string {
+  const CHUNK = 0x8000; // 32KB chunks
+  let result = "";
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    result += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK) as unknown as number[]);
+  }
+  return btoa(result);
+}
+
 type NodeType =
   | "TextNode"
   | "Section"
@@ -592,7 +601,7 @@ async function exportCurrentProjectAsMarkdownToClipboard(): Promise<void> {
     const ext = m[2].toLowerCase();
     const mime = mimeMap[ext] || "image/png";
     const bytes = await file.async("uint8array");
-    const b64 = btoa(String.fromCharCode(...bytes));
+    const b64 = uint8ToBase64(bytes);
     imageDataUriMap.set(m[1], `data:${mime};base64,${b64}`);
   }
 
