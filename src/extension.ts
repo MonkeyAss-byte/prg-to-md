@@ -371,33 +371,9 @@ async function exportCurrentProjectAsMarkdownToClipboard(): Promise<void> {
   const { nodes, edges } = extractAll(serializedStageObjects);
   const { sectionChildren, childToParent } = buildSectionHierarchy(serializedStageObjects);
 
-  // 收集所有 ImageNode 的 attachmentId，逐个从 attachments Map 获取 Blob
-  const imageIds: string[] = [];
-  for (const node of nodes.values()) {
-    if (node.type === "ImageNode") {
-      const aid = getString(node.raw.attachmentId);
-      if (aid) imageIds.push(aid);
-    }
-  }
-
+  // 注：project.attachments (Map<string,Blob>) 在 Comlink proxy 上不可用，
+  //     .get() / .has() / Array.from() 均失败。图片导出请用 prg_to_markdown_v5.py
   const imageDataUriMap = new Map<string, string>();
-  const attMap: any = await project.attachments;
-  if (attMap) {
-    for (const aid of imageIds) {
-      try {
-        const blob: Blob | undefined = await attMap.get(aid);
-        if (blob && blob.type.startsWith("image/")) {
-          const buf = await blob.arrayBuffer();
-          const bytes = new Uint8Array(buf);
-          let binary = "";
-          for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-          imageDataUriMap.set(aid, `data:${blob.type};base64,${btoa(binary)}`);
-        }
-      } catch {
-        // 单个图片失败不影响整体
-      }
-    }
-  }
 
   const edgeGraph = new Map<string, Array<{ target: string; text: string }>>();
   const pushEdge = (source: string, target: string, text: string) => {
