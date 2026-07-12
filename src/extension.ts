@@ -1,3 +1,6 @@
+import JSZip from "jszip";
+import { decode as msgpackDecode } from "@msgpack/msgpack";
+
 type NodeType =
   | "TextNode"
   | "Section"
@@ -559,30 +562,38 @@ async function exportCurrentProjectAsMarkdownToClipboard(): Promise<void> {
   else { prgPath = await uri.fsPath; if (!prgPath) prgPath = await uri.path; }
   if (!prgPath) throw new Error("无法获取文件路径");
 
-  // 2. 单次 Python 调用：解析 stage.msgpack + 提取图片 base64
+  // 2. PowerShell 读取 .prg 为 base64，JS 侧解析 ZIP + msgpack
   await prg.toast("⏳ 正在解析项目文件...");
   const imageDataUriMap = new Map<string, string>();
-  const pyScript = `
-import zipfile,base64,json,re,sys,msgpack
-m={'png':'image/png','jpg':'image/jpeg','jpeg':'image/jpeg','webp':'image/webp','gif':'image/gif','bmp':'image/bmp','svg':'image/svg+xml','tiff':'image/tiff','ico':'image/x-icon','jfif':'image/jpeg'}
-r={'stage':[],'images':{}}
-with zipfile.ZipFile(sys.argv[1]) as z:
- if 'stage.msgpack' in z.namelist():
-  r['stage']=msgpack.unpackb(z.read('stage.msgpack'),raw=False)
- for n in z.namelist():
-  if n.startswith('attachments/'):
-   a=re.match(r'attachments/([a-f0-9-]+)\\.(\\w+)$',n,re.I)
-   if a:
-    e=a.group(2).lower()
-    r['images'][a.group(1)]=f'data:{m.get(e,"image/png")};base64,{base64.b64encode(z.read(n)).decode()}'
-print(json.dumps(r))`.trim();
-  const { code, stdout } = await prg.shell_execute("python", ["-c", pyScript, prgPath]);
-  if (code !== 0 || !stdout) throw new Error("Python 解析失败");
-  const data = JSON.parse(stdout);
 
-  const stageData: any = data.stage;
-  for (const [k, v] of Object.entries(data.images || {})) {
-    imageDataUriMap.set(k, v as string);
+  const psCmd = `[Convert]::ToBase64String([IO.File]::ReadAllBytes('${prgPath.replace(/'/g, "''")}'))`;
+  const { code, stdout } = await prg.shell_execute("powershell", ["-NoProfile", "-Command", psCmd]);
+  if (code !== 0 || !stdout) throw new Error("读取项目文件失败");
+
+  // 解码 base64 → ZIP → msgpack
+  const zipData = Uint8Array.from(atob(stdout.trim()), (c) => c.charCodeAt(0));
+  const zip = await JSZip.loadAsync(zipData);
+
+  const stageFile = zip.file("stage.msgpack");
+  if (!stageFile) throw new Error("stage.msgpack 未找到");
+  const stageBytes = await stageFile.async("uint8array");
+  const stageData: any = msgpackDecode(stageBytes);
+
+  // 提取附件图片
+  const mimeMap: Record<string, string> = {
+    png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp",
+    gif: "image/gif", bmp: "image/bmp", svg: "image/svg+xml", tiff: "image/tiff",
+    ico: "image/x-icon", jfif: "image/jpeg",
+  };
+  const attachRe = /^attachments\/([a-f0-9-]+)\.(\w+)$/i;
+  for (const [name, file] of Object.entries(zip.files)) {
+    const m = name.match(attachRe);
+    if (!m) continue;
+    const ext = m[2].toLowerCase();
+    const mime = mimeMap[ext] || "image/png";
+    const bytes = await file.async("uint8array");
+    const b64 = btoa(String.fromCharCode(...bytes));
+    imageDataUriMap.set(m[1], `data:${mime};base64,${b64}`);
   }
 
   let serializedStageObjects: any[];
