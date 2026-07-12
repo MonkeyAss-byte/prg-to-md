@@ -124,6 +124,17 @@ function summarizeCustomData(value: unknown): string {
   return `${text.slice(0, 120)}...`;
 }
 
+function extractTextFromAssociation(obj: unknown): string {
+  const record = asRecord(obj);
+  if (!record) return "";
+  if (typeof record.text === "string" && record.text.trim()) return record.text.trim();
+  if (typeof record.details === "string" && record.details.trim()) return record.details.trim();
+  if (typeof record.name === "string" && record.name.trim()) return record.name.trim();
+  if (typeof record.title === "string" && record.title.trim()) return record.title.trim();
+  if (typeof record.description === "string" && record.description.trim()) return record.description.trim();
+  return "";
+}
+
 function extractAll(serializedStageObjects: unknown[]): {
   nodes: Map<string, RawNode>;
   edges: RawEdge[];
@@ -182,10 +193,24 @@ function extractAll(serializedStageObjects: unknown[]): {
       let target: string | null = assoc.length > 1 ? resolveUuid(serializedStageObjects, assoc[1]) : null;
       if (!source) source = resolveUuid(serializedStageObjects, item.source);
       if (!target) target = resolveUuid(serializedStageObjects, item.target);
+
+      // 从 edge.text 和 associationList 嵌套对象中提取文本
+      let edgeText = getString(item.text);
+      const assocTexts: string[] = [];
+      for (let ai = 0; ai < assoc.length; ai += 1) {
+        const t = extractTextFromAssociation(assoc[ai]);
+        if (t) assocTexts.push(t);
+      }
+      if (!edgeText && assocTexts.length > 0) {
+        edgeText = assocTexts.join(" · ");
+      } else if (edgeText && assocTexts.length > 0) {
+        edgeText = edgeText + " · " + assocTexts.join(" · ");
+      }
+
       edges.push({
         source,
         target,
-        text: getString(item.text),
+        text: edgeText,
         targets: [],
         type: className,
       });
@@ -195,9 +220,14 @@ function extractAll(serializedStageObjects: unknown[]): {
     if (className === "MultiTargetUndirectedEdge") {
       const targets: string[] = [];
       const assoc = Array.isArray(item.associationList) ? item.associationList : [];
+      const assocTexts: string[] = [];
       for (const a of assoc) {
         const uid = resolveUuid(serializedStageObjects, a);
-        if (uid) targets.push(uid);
+        if (uid) { targets.push(uid); }
+        else {
+          const t = extractTextFromAssociation(a);
+          if (t) assocTexts.push(t);
+        }
       }
       if (targets.length === 0) {
         const fallbackTargets = Array.isArray(item.targets) ? item.targets : [];
@@ -207,10 +237,16 @@ function extractAll(serializedStageObjects: unknown[]): {
         }
       }
       const uniqueTargets = Array.from(new Set(targets));
+      let edgeText = getString(item.text);
+      if (!edgeText && assocTexts.length > 0) {
+        edgeText = assocTexts.join(" · ");
+      } else if (edgeText && assocTexts.length > 0) {
+        edgeText = edgeText + " · " + assocTexts.join(" · ");
+      }
       edges.push({
         source: uniqueTargets[0] ?? null,
         target: uniqueTargets[0] ?? null,
-        text: "",
+        text: edgeText,
         targets: uniqueTargets,
         type: className,
       });
