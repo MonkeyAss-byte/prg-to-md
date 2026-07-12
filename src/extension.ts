@@ -267,7 +267,8 @@ function generateMarkdown(
   sectionChildren: Map<string, string[]>,
   edgeGraph: Map<string, Array<{ target: string; text: string }>>,
   imageDataUriMap: Map<string, string>,
-): string {
+): { markdown: string; unusedImages: string[] } {
+  const usedImages = new Set<string>();
   const lines: string[] = [
     "---",
     `title: ${title}`,
@@ -317,6 +318,7 @@ function generateMarkdown(
       const attachmentId = getString(node.raw.attachmentId);
       const dataUri = imageDataUriMap.get(attachmentId);
       if (dataUri) {
+        usedImages.add(attachmentId);
         lines.push(`${indent}![图片](${dataUri})`);
       } else {
         lines.push(`${indent}> 🖼️ *(图片附件未找到)*`);
@@ -359,7 +361,8 @@ function generateMarkdown(
     }
   }
 
-  return lines.join("\n");
+  const unusedImages = [...imageDataUriMap.keys()].filter((k) => !usedImages.has(k));
+  return { markdown: lines.join("\n"), unusedImages };
 }
 
 async function exportCurrentProjectAsMarkdownToClipboard(): Promise<void> {
@@ -368,6 +371,18 @@ async function exportCurrentProjectAsMarkdownToClipboard(): Promise<void> {
 
   const parsed = await project.parseProjectFile();
   const serializedStageObjects = Array.isArray(parsed.serializedStageObjects) ? parsed.serializedStageObjects : [];
+  
+  // 统计：输出所有 "_" 类型用于诊断
+  const typeCounts: Record<string, number> = {};
+  for (const obj of serializedStageObjects) {
+    if (obj && typeof obj === "object" && "_" in obj) {
+      const t = String((obj as any)._);
+      typeCounts[t] = (typeCounts[t] || 0) + 1;
+    }
+  }
+  const stats = Object.entries(typeCounts).map(([k,v]) => k + ":" + v).join(", ");
+  await prg.toast("节点: " + (stats || "空"));
+
   const { nodes, edges } = extractAll(serializedStageObjects);
   const { sectionChildren, childToParent } = buildSectionHierarchy(serializedStageObjects);
 
@@ -451,9 +466,18 @@ print(json.dumps(r))`.trim();
   );
 
   const title = getString(await project.title) || "Untitled";
-  const markdown = generateMarkdown(title, nodes, topLevel, sectionChildren, edgeGraph, imageDataUriMap);
+  const { markdown, unusedImages } = generateMarkdown(title, nodes, topLevel, sectionChildren, edgeGraph, imageDataUriMap);
 
-  await prg.dialog_copy("已复制 markdown", "可直接粘贴到你的文档中", markdown);
+  // 追加未被 ImageNode 引用的附件图片
+  let finalMarkdown = markdown;
+  if (unusedImages.length > 0) {
+    finalMarkdown += "\n\n---\n## 📎 附件图片\n\n";
+    for (const uri of unusedImages) {
+      finalMarkdown += `![附件](${uri})\n\n`;
+    }
+  }
+
+  await prg.dialog_copy("已复制 markdown", "可直接粘贴到你的文档中", finalMarkdown);
   await prg.toast_success("已生成并复制当前 .prg 的 markdown");
 }
 
