@@ -135,6 +135,123 @@ function extractTextFromAssociation(obj: unknown): string {
   return "";
 }
 
+function collectNestedNodes(
+  root: unknown[],
+  existingNodes: Map<string, RawNode>,
+): void {
+  const seen = new Set<unknown>();
+
+  function walk(obj: unknown): void {
+    if (obj === null || obj === undefined) return;
+    if (typeof obj !== "object") return;
+    if (seen.has(obj)) return;
+    seen.add(obj);
+
+    if (Array.isArray(obj)) {
+      for (const item of obj) walk(item);
+      return;
+    }
+
+    const record = obj as Record<string, unknown>;
+    const className = getString(record._);
+    if (PROJECT_NODE_TYPES.has(className)) {
+      const uuid = getString(record.uuid);
+      if (uuid && !existingNodes.has(uuid)) {
+        let text = "";
+        if (className === "TextNode" || className === "Section") {
+          text = getString(record.text);
+        } else if (className === "UrlNode") {
+          text = "🔗 " + getString(record.title) + " | " + getString(record.url);
+        } else if (className === "ImageNode") {
+          const aId = getString(record.attachmentId);
+          text = "🖼️ Image " + (aId ? "[" + aId.slice(0, 8) + "...]" : "");
+        } else if (className === "LatexNode") {
+          text = "$$" + getString(record.latexSource) + "$$";
+        } else if (className === "ConnectPoint") {
+          text = "●";
+        } else if (className === "ReferenceBlockNode") {
+          text = "📄 " + getString(record.fileName);
+        } else if (className === "ExtensionEntity") {
+          const extId = getString(record.extensionId);
+          const tn = getString(record.typeName);
+          const cd = summarizeCustomData(record.customData);
+          const h = [extId, tn].filter(Boolean).join(" · ");
+          text = h ? "🧩 " + h : "🧩 扩展实体";
+          if (cd) text += " | " + cd;
+        }
+        existingNodes.set(uuid, {
+          uuid,
+          type: className as NodeType,
+          text,
+          pos: getPosition(record),
+          raw: record,
+        });
+      }
+    }
+
+    // Recurse into children, associationList, and any array
+    for (const key of Object.keys(record)) {
+      const val = record[key];
+      if (Array.isArray(val)) {
+        for (const item of val) walk(item);
+      } else if (typeof val === "object" && val !== null) {
+        walk(val);
+      }
+    }
+  }
+
+  for (const item of root) walk(item);
+}
+
+function collectNestedSectionHierarchy(
+  root: unknown[],
+  sectionChildren: Map<string, string[]>,
+  childToParent: Map<string, string>,
+): void {
+  const seen = new Set<unknown>();
+
+  function walk(obj: unknown): void {
+    if (obj === null || obj === undefined) return;
+    if (typeof obj !== "object") return;
+    if (seen.has(obj)) return;
+    seen.add(obj);
+
+    if (Array.isArray(obj)) {
+      for (const item of obj) walk(item);
+      return;
+    }
+
+    const record = obj as Record<string, unknown>;
+    if (getString(record._) === "Section") {
+      const sectionUuid = getString(record.uuid);
+      const childrenRaw = Array.isArray(record.children) ? record.children : [];
+      if (sectionUuid && childrenRaw.length > 0 && !sectionChildren.has(sectionUuid)) {
+        const children: string[] = [];
+        for (const child of childrenRaw) {
+          const uid = resolveRef(root, (child as Record<string, unknown>)?.$) || resolveUuid(root, child);
+          if (uid) {
+            children.push(uid);
+            if (!childToParent.has(uid)) childToParent.set(uid, sectionUuid);
+          }
+        }
+        sectionChildren.set(sectionUuid, children);
+      }
+    }
+
+    // Recurse
+    for (const key of Object.keys(record)) {
+      const val = record[key];
+      if (Array.isArray(val)) {
+        for (const item of val) walk(item);
+      } else if (typeof val === "object" && val !== null) {
+        walk(val);
+      }
+    }
+  }
+
+  for (const item of root) walk(item);
+}
+
 function extractAll(serializedStageObjects: unknown[]): {
   nodes: Map<string, RawNode>;
   edges: RawEdge[];
@@ -328,59 +445,82 @@ function generateMarkdown(
 
   const visited = new Set<string>();
 
-  const renderNode = (uuid: string, depth: number) => {
+  function writeImageNode(node: RawNode, indent: string): boolean {
+    const attachmentId = getString(node.raw.attachmentId);
+    const dataUri = imageDataUriMap.get(attachmentId);
+    if (dataUri) {
+      const refKey = "img-" + (++refIndex);
+      imageRefs.set(refKey, dataUri);
+      lines.push(`${indent}- ![图片][${refKey}]`);
+      return true;
+    }
+    lines.push(`${indent}- 🖼️ *(图片附件未找到)*`);
+    return false;
+  }
+
+  function writeNodeContent(uuid: string, indent: string, asHeading: boolean, depth: number): void {
     if (visited.has(uuid)) return;
     visited.add(uuid);
     const node = nodes.get(uuid);
     if (!node) return;
     const text = node.text.trim();
 
-    if (node.type === "TextNode") {
-      const heading = "#".repeat(Math.min(depth + 2, 6));
-      lines.push(`${heading} ${text || "(无文本)"}`);
-    } else if (node.type === "Section") {
-      const heading = "#".repeat(Math.min(depth + 2, 6));
-      lines.push(`${heading} 📁 ${text || "未命名分组"}`);
-    } else if (node.type === "UrlNode" || node.type === "LatexNode" || node.type === "ReferenceBlockNode" || node.type === "ExtensionEntity") {
-      const indent = "  ".repeat(depth);
-      lines.push(`${indent}- ${text || node.type}`);
-    } else if (node.type === "ImageNode") {
-      const indent = "  ".repeat(Math.min(depth, 1));
-      const attachmentId = getString(node.raw.attachmentId);
-      const dataUri = imageDataUriMap.get(attachmentId);
-      if (dataUri) {
-        const refKey = "img-" + (++refIndex);
-        imageRefs.set(refKey, dataUri);
-        lines.push(`${indent}- ![图片][${refKey}]`);
+    if (asHeading) {
+      if (node.type === "TextNode") {
+        const heading = "#".repeat(Math.min(depth + 2, 6));
+        lines.push(`${heading} ${text || "(无文本)"}`);
+      } else if (node.type === "Section") {
+        const heading = "#".repeat(Math.min(depth + 2, 6));
+        lines.push(`${heading} 📁 ${text || "未命名分组"}`);
+      } else if (node.type === "ImageNode") {
+        writeImageNode(node, indent);
       } else {
-        lines.push(`${indent}- 🖼️ *(图片附件未找到)*`);
+        lines.push(`${indent}- ${text || node.type}`);
+      }
+    } else {
+      // 列表模式：边的目标节点用缩进列表
+      if (node.type === "TextNode") {
+        lines.push(`${indent}- ${text || "(无文本)"}`);
+      } else if (node.type === "Section") {
+        lines.push(`${indent}- **${text || "未命名分组"}**`);
+      } else if (node.type === "ImageNode") {
+        writeImageNode(node, indent);
+      } else {
+        lines.push(`${indent}- ${text || node.type}`);
       }
     }
 
-    // 先渲染 Section 子节点
+    // 1. 先渲染 Section 包含的子节点
     const children = sectionChildren.get(uuid) ?? [];
-    for (const child of children) renderNode(child, depth + 1);
+    const childIndent = asHeading ? "  ".repeat(depth + 1) : indent + "  ";
+    for (const child of children) {
+      writeNodeContent(child, childIndent, asHeading, depth + 1);
+    }
 
-    // 再渲染边连接节点（用位置排序确保顺序正确）
+    // 2. 再渲染边连接节点（用列表模式，不带 # 标题）
     const outgoing = edgeGraph.get(uuid) ?? [];
     const sortedOut = sortByPosition(nodes, outgoing.map(e => e.target));
     for (const targetId of sortedOut) {
       if (visited.has(targetId)) continue;
-      const edgeText = outgoing.find(e => e.target === targetId)?.text;
-      if (edgeText) {
-        const indent = "  ".repeat(Math.max(0, depth));
-        lines.push(`${indent}> 💬 *${edgeText}*`);
-      }
-      renderNode(targetId, depth + 1);
-    }
-  };
+      const edge = outgoing.find(e => e.target === targetId);
+      const edgeText = edge?.text?.trim() ?? "";
+      const targetNode = nodes.get(targetId);
+      const targetText = targetNode?.text?.trim() ?? "";
 
-  // 按类型分组渲染顶层：Section 优先，然后 TextNode
+      // 边标签与目标节点同名 → 不重复显示边标签
+      if (edgeText && edgeText !== targetText) {
+        lines.push(`${indent}  > 💬 *${edgeText}*`);
+      }
+      writeNodeContent(targetId, indent + "  ", false, depth + 1);
+    }
+  }
+
+  // 渲染顶层节点（使用 # 标题模式）
   for (const uuid of topLevel) {
-    if (nodes.get(uuid)?.type === "Section") { renderNode(uuid, 0); lines.push(""); }
+    if (nodes.get(uuid)?.type === "Section") { writeNodeContent(uuid, "", true, 0); lines.push(""); }
   }
   for (const uuid of topLevel) {
-    if (nodes.get(uuid)?.type !== "Section") { renderNode(uuid, 0); lines.push(""); }
+    if (nodes.get(uuid)?.type !== "Section") { writeNodeContent(uuid, "", true, 0); lines.push(""); }
   }
 
   const leftovers = sortByPosition(
@@ -395,15 +535,8 @@ function generateMarkdown(
     for (const uuid of leftovers) {
       const node = nodes.get(uuid);
       if (!node) continue;
-      if (node.type === "ImageNode") {
-        const attachmentId = getString(node.raw.attachmentId);
-        const dataUri = imageDataUriMap.get(attachmentId);
-        if (dataUri) {
-          const refKey = "img-" + (++refIndex);
-          imageRefs.set(refKey, dataUri);
-          lines.push(`- ![图片][${refKey}]`);
-        }
-      } else {
+      if (node.type === "ImageNode") writeImageNode(node, "");
+      else {
         const display = node.text.trim() || "(无文本)";
         const prefix = node.type === "Section" ? "📁 " : "";
         lines.push(`- ${prefix}${display}`);
@@ -415,6 +548,7 @@ function generateMarkdown(
 }
 
 async function exportCurrentProjectAsMarkdownToClipboard(): Promise<void> {
+  await prg.toast("⏳ 正在准备导出...");
   const project = await prg.tabs_getCurrentProject();
   if (!project) throw new Error("当前没有打开的项目标签页");
 
@@ -426,6 +560,7 @@ async function exportCurrentProjectAsMarkdownToClipboard(): Promise<void> {
   if (!prgPath) throw new Error("无法获取文件路径");
 
   // 2. 单次 Python 调用：解析 stage.msgpack + 提取图片 base64
+  await prg.toast("⏳ 正在解析项目文件...");
   const imageDataUriMap = new Map<string, string>();
   const pyScript = `
 import zipfile,base64,json,re,sys,msgpack
@@ -461,6 +596,8 @@ print(json.dumps(r))`.trim();
 
   const { nodes, edges } = extractAll(serializedStageObjects);
   const { sectionChildren, childToParent } = buildSectionHierarchy(serializedStageObjects);
+  collectNestedNodes(serializedStageObjects, nodes);
+  collectNestedSectionHierarchy(serializedStageObjects, sectionChildren, childToParent);
   const edgeGraph = new Map<string, Array<{ target: string; text: string }>>();
   const pushEdge = (source: string, target: string, text: string) => {
     const arr = edgeGraph.get(source) ?? [];
@@ -479,14 +616,25 @@ print(json.dumps(r))`.trim();
     }
   }
 
+  // 计算仅通过边可达的节点（不作为顶层，仅通过边渲染）
+  const edgeTargetSet = new Set<string>();
+  for (const [, targets] of edgeGraph) {
+    for (const t of targets) edgeTargetSet.add(t.target);
+  }
+  // edgeOnly: 是边的目标 且 不在包含层级中
+  const edgeOnlyNodes = new Set<string>();
+  for (const uuid of edgeTargetSet) {
+    if (!childToParent.has(uuid)) edgeOnlyNodes.add(uuid);
+  }
+
   const topLevel = sortByPosition(
     nodes,
-    [...nodes.keys()].filter((uuid) => !childToParent.has(uuid)),
+    [...nodes.keys()].filter((uuid) => !childToParent.has(uuid) && !edgeOnlyNodes.has(uuid)),
   );
 
   const title = getString(await project.title) || "Untitled";
+  await prg.toast("⏳ 正在生成排版...");
   const { markdown, imageRefs, missedCount } = generateMarkdown(title, nodes, topLevel, sectionChildren, edgeGraph, imageDataUriMap);
-  await prg.toast("遗漏节点: " + missedCount);
 
   // 追加未引用的附件图片 + 所有引用定义
   let finalMarkdown = markdown;
@@ -511,7 +659,7 @@ print(json.dumps(r))`.trim();
   }
 
   await prg.dialog_copy("已复制 markdown", "可直接粘贴到你的文档中", finalMarkdown);
-  await prg.toast_success("已生成并复制当前 .prg 的 markdown");
+  await prg.toast_success(`✅ 导出完成 · ${nodes.size} 节点 · ${edges.length} 连线`);
 }
 
 // ── 注册快捷键 ──
@@ -521,6 +669,7 @@ await prg.keybinds_register(
   { $lucide: "FileText" },
   "m d s",
   Comlink.proxy(async () => {
+    await prg.toast("⏳ 正在导出 Markdown...");
     try {
       await exportCurrentProjectAsMarkdownToClipboard();
     } catch (e) {
