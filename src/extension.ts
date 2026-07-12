@@ -371,29 +371,36 @@ async function exportCurrentProjectAsMarkdownToClipboard(): Promise<void> {
   const { nodes, edges } = extractAll(serializedStageObjects);
   const { sectionChildren, childToParent } = buildSectionHierarchy(serializedStageObjects);
 
-  // 通过 fetch_binary 读 .prg ZIP 文件 + JSZip 解压提取图片 base64
+  // 通过 shell_execute + Python 读 .prg ZIP 提取图片 base64
+  // Comlink 不支持 Blob/file:// fetch，这是唯一跨平台可行方案
   const imageDataUriMap = new Map<string, string>();
   try {
+    // 获取 .prg 文件路径
     const uri: any = await project.uri;
-    const fileUrl = String(uri);
-    const mimes: Record<string, string> = {
-      png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
-      webp: "image/webp", gif: "image/gif", bmp: "image/bmp", svg: "image/svg+xml",
-    };
-    const { buffer } = await prg.fetch_binary(fileUrl);
-    // 动态 import JSZip（esbuild 会 bundle）
-    const JSZip = (await import("jszip")).default;
-    const zip = await JSZip.loadAsync(buffer);
-    for (const [name, entry] of Object.entries(zip.files)) {
-      if (entry.dir || !name.startsWith("attachments/")) continue;
-      const match = name.match(/^attachments\/([a-f0-9-]+)\.(\w+)$/);
-      if (!match) continue;
-      const base64 = await entry.async("base64");
-      const ext = match[2].toLowerCase();
-      imageDataUriMap.set(match[1], `data:${mimes[ext] || ""};base64,${base64}`);
+    const prgPath = typeof uri === "string" ? uri
+      : (typeof uri?.path === "string" ? uri.path : "");
+    if (!prgPath) { await prg.toast("无法获取文件路径"); }
+    else {
+      const pyScript = `import zipfile,base64,json,re,sys
+m={'png':'image/png','jpg':'image/jpeg','jpeg':'image/jpeg','webp':'image/webp','gif':'image/gif','bmp':'image/bmp','svg':'image/svg+xml'}
+r={}
+with zipfile.ZipFile(sys.argv[1]) as z:
+ for n in z.namelist():
+  if n.startswith('attachments/'):
+   a=re.match(r'attachments/([a-f0-9-]+)\\.(\\w+)$',n)
+   if a: r[a.group(1)]=f'data:{m.get(a.group(2),\"\")};base64,{base64.b64encode(z.read(n)).decode()}'
+print(json.dumps(r))`;
+      const { code, stdout } = await prg.shell_execute("python", ["-c", pyScript, prgPath]);
+      if (code === 0 && stdout) {
+        const map = JSON.parse(stdout);
+        for (const [k, v] of Object.entries(map)) imageDataUriMap.set(k, v as string);
+        await prg.toast_success("图片: " + imageDataUriMap.size);
+      } else {
+        await prg.toast("py code=" + code);
+      }
     }
-  } catch {
-    // ZIP 读取失败时图片占位
+  } catch (e) {
+    await prg.toast_error("图片提取失败: " + (e instanceof Error ? e.message : String(e)));
   }
 
   const edgeGraph = new Map<string, Array<{ target: string; text: string }>>();
